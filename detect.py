@@ -15,9 +15,39 @@ from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized, TracedModel
 
 
+video = cv2.VideoWriter('film_test.mp4',cv2.VideoWriter_fourcc(*'mp4v'), 30, (1080, 1920))
+persons = []
+persons_temp = []
+
+def count_overlap(bb1, bb2):
+    id_person_from_last_frame = bb1[0]
+    # determine the coordinates of the intersection rectangle
+    x_left = max(bb1[1], bb2[1])
+    y_top = max(bb1[2], bb2[2])
+    x_right = min(bb1[3], bb2[3])
+    y_bottom = min(bb1[4], bb2[4])
+    if x_right < x_left or y_bottom < y_top:
+        return [0.0, id_person_from_last_frame]
+    intersection_area = (x_right - x_left) * (y_bottom - y_top)
+    return [intersection_area, id_person_from_last_frame]
+
+
+def find_max_overlap(current_person):
+    max_overlap = 0.0
+    searched_id = 4
+    for person in persons:
+        overlap, id_person_from_last_frame = count_overlap(person, current_person)
+        if overlap > max_overlap:
+            max_overlap = overlap
+            searched_id = id_person_from_last_frame
+    current_person[0] = searched_id
+    persons_temp.append(current_person)
+
+
 def detect(save_img=False):
-    persons = []
     last_id_person = 1
+
+    frame_number = 1
 
     source, weights, view_img, save_txt, imgsz, trace = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size, not opt.no_trace
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
@@ -123,7 +153,10 @@ def detect(save_img=False):
                     n = (det[:, -1] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
+                global original_image 
                 original_image = im0.copy()
+
+                cv2.imwrite('test.png', original_image)
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
@@ -136,8 +169,24 @@ def detect(save_img=False):
                         label = f'{names[int(cls)]} {conf:.2f}'
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=1)
 
-
-
+                        global persons
+                        
+                        if frame_number == 1:
+                            x1 = int(xyxy[0].item())
+                            y1 = int(xyxy[1].item())
+                            x2 = int(xyxy[2].item())
+                            y2 = int(xyxy[3].item())
+                            current_person = [last_id_person, x1, y1, x2, y2]
+                            persons.append(current_person)
+                            last_id_person += 1
+                        else:
+                            x1 = int(xyxy[0].item())
+                            y1 = int(xyxy[1].item())
+                            x2 = int(xyxy[2].item())
+                            y2 = int(xyxy[3].item())
+                            current_person = [last_id_person, x1, y1, x2, y2]
+                            find_max_overlap(current_person)
+                
             # Print time (inference + NMS)
             print(f'{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS')
 
@@ -165,14 +214,28 @@ def detect(save_img=False):
                             save_path += '.mp4'
                         vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer.write(im0)
+        if frame_number > 1:
+            persons.clear()
+            persons = persons_temp.copy()
+            persons_temp.clear()
+        for person in persons:
+            cv2.rectangle(original_image, (person[1], person[2]), (person[3], person[4]), (255,0,0), 3)
+            cv2.putText(original_image, "id: " + str(person[0]), (person[1], person[2] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0))
 
+        if frame_number == 1:
+            cv2.imwrite('first_frame.png', original_image)            
 
+        video.write(original_image)
+        last_id_person = 1 
+
+        frame_number += 1
 
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         #print(f"Results saved to {save_dir}{s}")
 
     print(f'Done. ({time.time() - t0:.3f}s)')
+    video.release()
 
 
 
